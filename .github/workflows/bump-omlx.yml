@@ -1,0 +1,65 @@
+name: Bump omlx formula
+
+on:
+  schedule:
+    - cron: "40 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest omlx release
+        id: latest
+        run: |
+          VERSION=$(gh release view --repo jundot/omlx --json tagName -q .tagName)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download source tarball
+        run: |
+          curl -L -o /tmp/omlx.tar.gz \
+            "https://github.com/jundot/omlx/archive/refs/tags/${{ steps.latest.outputs.version }}.tar.gz"
+
+      - name: Compute sha256
+        id: sha
+        run: |
+          SHA=$(sha256sum /tmp/omlx.tar.gz | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula
+        run: |
+          python3 - <<'PY'
+          import re, pathlib, os
+          p = pathlib.Path("Formula/omlx.rb")
+          s = p.read_text()
+          version = os.environ["VERSION"]
+          sha = os.environ["SHA"]
+          s = re.sub(
+              r'url "https://github\.com/jundot/omlx/archive/refs/tags/v[^"]+\.tar\.gz"',
+              f'url "https://github.com/jundot/omlx/archive/refs/tags/{version}.tar.gz"',
+              s
+          )
+          s = re.sub(
+              r'sha256 "[0-9a-f]{64}"',
+              f'sha256 "{sha}"',
+              s
+          )
+          p.write_text(s)
+          PY
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+          SHA: ${{ steps.sha.outputs.sha }}
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/omlx.rb
+          git diff --cached --quiet || git commit -m "omlx: bump to ${{ steps.latest.outputs.version }}"
+          git push
